@@ -6,10 +6,50 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 // Extend Window interface for speech recognition
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onstart: ((this: SpeechRecognition, ev: Event) => void) | null;
+  onresult: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => void) | null;
+  onerror: ((this: SpeechRecognition, ev: SpeechRecognitionErrorEvent) => void) | null;
+  onend: ((this: SpeechRecognition, ev: Event) => void) | null;
+  start(): void;
+  stop(): void;
+}
+
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList;
+}
+
+interface SpeechRecognitionResultList {
+  length: number;
+  item(index: number): SpeechRecognitionResult;
+  [index: number]: SpeechRecognitionResult;
+}
+
+interface SpeechRecognitionResult {
+  length: number;
+  item(index: number): SpeechRecognitionAlternative;
+  [index: number]: SpeechRecognitionAlternative;
+}
+
+interface SpeechRecognitionAlternative {
+  transcript: string;
+  confidence: number;
+}
+
+interface SpeechRecognitionErrorEvent extends Event {
+  error: string;
+  message: string;
+}
+
+type SpeechRecognitionConstructor = new () => SpeechRecognition;
+
 declare global {
   interface Window {
-    webkitSpeechRecognition: any;
-    SpeechRecognition: any;
+    webkitSpeechRecognition: SpeechRecognitionConstructor;
+    SpeechRecognition: SpeechRecognitionConstructor;
   }
 }
 
@@ -24,13 +64,12 @@ export default function Home() {
   const [inputValue, setInputValue] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isStreaming, setIsStreaming] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const handleSubmitRef = useRef<(() => void) | null>(null);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -72,8 +111,8 @@ export default function Home() {
         
         // Auto-send the transcribed message
         setTimeout(() => {
-          if (transcript.trim()) {
-            handleSubmit(new Event('submit') as any);
+          if (transcript.trim() && handleSubmitRef.current) {
+            handleSubmitRef.current();
           }
         }, 100);
       };
@@ -147,7 +186,6 @@ export default function Home() {
               : msg
           )
         );
-        setIsStreaming(false);
       }
     };
     
@@ -170,8 +208,8 @@ export default function Home() {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = useCallback(async (e?: React.FormEvent) => {
+    e?.preventDefault();
     if (!inputValue.trim() || isLoading) return;
 
     const userMessage: Message = {
@@ -190,7 +228,6 @@ export default function Home() {
     setMessages(prev => [...prev, userMessage, assistantMessage]);
     setInputValue("");
     setIsLoading(true);
-    setIsStreaming(true);
 
     try {
       const response = await fetch('/api/chat', {
@@ -202,7 +239,9 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to get response');
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        console.error('API Error Response:', errorData);
+        throw new Error(errorData.error || 'Failed to get response');
       }
 
       const data = await response.json();
@@ -222,11 +261,15 @@ export default function Home() {
             : msg
         )
       );
-      setIsStreaming(false);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [inputValue, isLoading, streamText]);
+
+  // Sync handleSubmit to ref for speech recognition
+  useEffect(() => {
+    handleSubmitRef.current = () => handleSubmit();
+  }, [handleSubmit]);
 
   return (
     <div className="min-h-screen bg-[#F9FAFB] flex flex-col">
